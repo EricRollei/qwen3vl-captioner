@@ -688,6 +688,30 @@ class SettingsPanel(QFrame):
 
         layout.addWidget(self._separator())
 
+        # ─── GPU SELECTION ────────────────────────────────
+        layout.addWidget(self._section_header("GPU DEVICE"))
+
+        self.gpu_combo = QComboBox()
+        self.gpu_combo.addItem("Auto (GPU 0)")
+        self.gpu_combo.setStyleSheet(
+            f"QComboBox {{ background: {COLORS['bg_input']}; color: {COLORS['text_primary']}; "
+            f"border: 1px solid {COLORS['border_light']}; border-radius: 4px; "
+            f"padding: 4px 8px; font-size: 11px; min-height: 28px; }}"
+            f"QComboBox:hover {{ border-color: {COLORS['accent']}; }}"
+            f"QComboBox QAbstractItemView {{ background: {COLORS['bg_dark']}; "
+            f"color: {COLORS['text_primary']}; selection-background-color: {COLORS['accent']}; "
+            f"selection-color: #ffffff; border: 1px solid {COLORS['border']}; }}"
+        )
+        self.gpu_combo.setToolTip("Select which GPU to use for model inference")
+        layout.addWidget(self.gpu_combo)
+
+        gpu_hint = QLabel("Choose the GPU for model offloading. Reload required after changing.")
+        gpu_hint.setWordWrap(True)
+        gpu_hint.setStyleSheet(f"color: {COLORS['text_dim']}; font-size: 10px;")
+        layout.addWidget(gpu_hint)
+
+        layout.addWidget(self._separator())
+
         # ─── MODEL STATUS INFO BOX ───────────────────────
         self.status_frame = QFrame()
         self.status_frame.setProperty("class", "model-status")
@@ -1543,6 +1567,10 @@ class SettingsPanel(QFrame):
         """Get the state of all extra option checkboxes."""
         return {key: cb.isChecked() for key, cb in self._extra_checkboxes.items()}
 
+    def get_selected_gpu(self) -> int:
+        """Return the 0-based GPU device index selected by the user."""
+        return max(0, self.gpu_combo.currentIndex())
+
     # ─── Status Updates ───────────────────────────────────
 
     def set_model_status(self, status: str, detail: str = "", is_loaded: bool = False):
@@ -1553,6 +1581,7 @@ class SettingsPanel(QFrame):
         self.load_model_btn.setEnabled(not is_loaded)
         self.unload_model_btn.setEnabled(is_loaded)
         self.model_combo.setEnabled(not is_loaded)
+        self.gpu_combo.setEnabled(not is_loaded)
 
         # Update load button appearance based on state
         if is_loaded:

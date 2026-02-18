@@ -156,6 +156,7 @@ class Qwen3VLEngine:
         mmproj_path: str | Path,
         n_ctx: int = 8192,
         n_gpu_layers: int = -1,
+        main_gpu: int = 0,
         verbose: bool = False,
         progress_callback: Optional[Callable[[str], None]] = None,
     ) -> None:
@@ -167,6 +168,7 @@ class Qwen3VLEngine:
             mmproj_path: Path to the mmproj vision encoder .gguf file.
             n_ctx: Context window size (tokens).
             n_gpu_layers: Number of layers to offload to GPU (-1 = all).
+            main_gpu: GPU device index to use as primary (0-based).
             verbose: Enable llama.cpp verbose logging.
             progress_callback: Optional callback for status messages.
         """
@@ -205,6 +207,7 @@ class Qwen3VLEngine:
             model_path=str(model_path),
             n_ctx=n_ctx,
             n_gpu_layers=n_gpu_layers,  # Use GPU acceleration
+            main_gpu=main_gpu,
             chat_handler=self.chat_handler,
             verbose=verbose,
         )

@@ -40,17 +40,19 @@ class ModelLoadWorker(QObject):
     finished = pyqtSignal()
     error = pyqtSignal(str)
 
-    def __init__(self, engine: Qwen3VLEngine, model_path: Path, mmproj_path: Path):
+    def __init__(self, engine: Qwen3VLEngine, model_path: Path, mmproj_path: Path, main_gpu: int = 0):
         super().__init__()
         self.engine = engine
         self.model_path = model_path
         self.mmproj_path = mmproj_path
+        self.main_gpu = main_gpu
 
     def run(self):
         try:
             self.engine.load_model(
                 self.model_path,
                 self.mmproj_path,
+                main_gpu=self.main_gpu,
                 progress_callback=lambda msg: self.progress.emit(msg),
             )
             self.finished.emit()
@@ -606,12 +608,12 @@ class MainWindow(QMainWindow):
 
         # Find or download mmproj
         model_dir = model_path.parent
-        self._settings_panel.set_model_status("Checking for vision encoder...")
+        self._settings_panel.set_model_loading("Checking for vision encoder...")
 
         try:
             mmproj_path = ensure_mmproj(
                 model_dir,
-                progress_callback=lambda msg, _: self._settings_panel.set_model_status(msg),
+                progress_callback=lambda msg, _: self._settings_panel.set_model_loading(msg),
             )
         except Exception as e:
             QMessageBox.critical(
@@ -622,18 +624,18 @@ class MainWindow(QMainWindow):
             return
 
         # Load in background thread
-        self._settings_panel.set_model_status("Loading model...")
-        self._settings_panel.load_model_btn.setEnabled(False)
+        self._settings_panel.set_model_loading(f"Loading {model_path.name}...")
         self._set_connection_status("loading", "Loading model...")
 
         # Store as instance attrs to prevent garbage collection (QThread crash fix)
         self._model_load_thread = QThread()
-        self._model_load_worker = ModelLoadWorker(self._engine, model_path, mmproj_path)
+        selected_gpu = self._settings_panel.get_selected_gpu()
+        self._model_load_worker = ModelLoadWorker(self._engine, model_path, mmproj_path, main_gpu=selected_gpu)
         self._model_load_worker.moveToThread(self._model_load_thread)
 
         self._model_load_thread.started.connect(self._model_load_worker.run)
         self._model_load_worker.progress.connect(
-            lambda msg: self._settings_panel.set_model_status(msg)
+            lambda msg: self._settings_panel.set_model_loading(msg)
         )
         self._model_load_worker.finished.connect(self._on_model_loaded)
         self._model_load_worker.error.connect(self._on_model_load_error)
@@ -652,7 +654,6 @@ class MainWindow(QMainWindow):
             is_loaded=True,
         )
         self._set_connection_status("ready", "Model ready")
-        self._settings_panel.model_combo.setEnabled(False)  # Must unload before switching
         self._update_gpu_info()
         if not self._gpu_timer.isActive():
             self._gpu_timer.start()
@@ -661,7 +662,6 @@ class MainWindow(QMainWindow):
     def _on_model_load_error(self, error: str):
         """Handle model load failure."""
         self._settings_panel.set_model_status(f"Error loading model", detail=error[:100])
-        self._settings_panel.load_model_btn.setEnabled(True)
         self._set_connection_status("error", "Error")
         self._notify(f"Model load failed: {error[:80]}", "error")
         QMessageBox.critical(self, "Model Load Error", f"Failed to load model:\n\n{error}")
@@ -679,12 +679,12 @@ class MainWindow(QMainWindow):
             )
             return
 
+        self._settings_panel.set_model_loading("Unloading model...")
         self._engine.unload()
 
         # Reset UI state
         self._settings_panel.set_model_status("Model unloaded", is_loaded=False)
         self._set_connection_status("ready", "Model unloaded")
-        self._settings_panel.model_combo.setEnabled(True)
 
         # Refresh GPU display (timer keeps running to show VRAM)
         self._update_gpu_info()
@@ -1261,6 +1261,7 @@ class MainWindow(QMainWindow):
     def _init_nvml(self):
         """Initialize NVIDIA Management Library for real VRAM monitoring."""
         self._pynvml = None
+        self._nvml_handles = []  # handles for all GPUs
         try:
             import warnings
             with warnings.catch_warnings():
@@ -1268,15 +1269,40 @@ class MainWindow(QMainWindow):
                 import pynvml
             self._pynvml = pynvml
             pynvml.nvmlInit()
-            self._nvml_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+            gpu_count = pynvml.nvmlDeviceGetCount()
+            gpu_names = []
+            for i in range(gpu_count):
+                handle = pynvml.nvmlDeviceGetHandleByIndex(i)
+                self._nvml_handles.append(handle)
+                name = pynvml.nvmlDeviceGetName(handle)
+                if isinstance(name, bytes):
+                    name = name.decode('utf-8')
+                mem = pynvml.nvmlDeviceGetMemoryInfo(handle)
+                vram_gb = mem.total / (1024 ** 3)
+                gpu_names.append(f"GPU {i}: {name} ({vram_gb:.0f} GB)")
+            # Keep backward compat
+            self._nvml_handle = self._nvml_handles[0] if self._nvml_handles else None
+            # Populate GPU combo in settings panel
+            if gpu_names:
+                self._settings_panel.gpu_combo.clear()
+                self._settings_panel.gpu_combo.addItems(gpu_names)
         except Exception:
             self._nvml_handle = None
+            self._nvml_handles = []
 
     def _update_gpu_info(self):
         """Update GPU/VRAM display in the nav bar pill using pynvml."""
-        if self._nvml_handle is not None and self._pynvml is not None:
+        # Use the GPU selected in settings panel for monitoring
+        gpu_idx = self._settings_panel.get_selected_gpu()
+        handle = None
+        if self._nvml_handles and gpu_idx < len(self._nvml_handles):
+            handle = self._nvml_handles[gpu_idx]
+        elif self._nvml_handle is not None:
+            handle = self._nvml_handle
+
+        if handle is not None and self._pynvml is not None:
             try:
-                mem_info = self._pynvml.nvmlDeviceGetMemoryInfo(self._nvml_handle)
+                mem_info = self._pynvml.nvmlDeviceGetMemoryInfo(handle)
                 mem_used_gb = mem_info.used / (1024 ** 3)
                 mem_total_gb = mem_info.total / (1024 ** 3)
                 pct = int(mem_info.used / mem_info.total * 100) if mem_info.total > 0 else 0
