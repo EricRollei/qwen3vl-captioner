@@ -168,6 +168,9 @@ class MainWindow(QMainWindow):
         # Populate model pick-list from available GGUF files on disk
         self._refresh_model_combo()
 
+        # Populate GPU selector from enumerated devices
+        self._populate_gpu_combo()
+
         # Kick off GPU monitoring immediately (don't wait for model load)
         self._update_gpu_info()
         self._gpu_timer.start()
@@ -1282,13 +1285,18 @@ class MainWindow(QMainWindow):
                 gpu_names.append(f"GPU {i}: {name} ({vram_gb:.0f} GB)")
             # Keep backward compat
             self._nvml_handle = self._nvml_handles[0] if self._nvml_handles else None
-            # Populate GPU combo in settings panel
-            if gpu_names:
-                self._settings_panel.gpu_combo.clear()
-                self._settings_panel.gpu_combo.addItems(gpu_names)
+            # Store names for later combo population
+            self._gpu_names = gpu_names
         except Exception:
             self._nvml_handle = None
             self._nvml_handles = []
+            self._gpu_names = []
+
+    def _populate_gpu_combo(self):
+        """Populate the GPU selector combo with enumerated NVIDIA devices."""
+        if self._gpu_names:
+            self._settings_panel.gpu_combo.clear()
+            self._settings_panel.gpu_combo.addItems(self._gpu_names)
 
     def _update_gpu_info(self):
         """Update GPU/VRAM display in the nav bar pill using pynvml."""
