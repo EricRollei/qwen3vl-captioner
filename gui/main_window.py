@@ -992,6 +992,9 @@ class MainWindow(QMainWindow):
         self._settings_panel.set_generating(False)
         self._image_viewer.set_processing(False)
 
+        # Replace streamed tokens with final caption (includes prefix/suffix)
+        self._caption_panel.set_caption(caption)
+
         # Cache the caption
         if self._current_image:
             self._captions[str(self._current_image)] = caption
