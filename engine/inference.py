@@ -202,14 +202,25 @@ class Qwen3VLEngine:
         if progress_callback:
             progress_callback("Loading language model (this may take a minute)...")
 
+        # Build tensor_split to force the model onto ONLY the selected GPU.
+        # Without this, llama.cpp will try to distribute layers across ALL
+        # available GPUs, which can hang during multi-GPU communication setup.
+        tensor_split = None
+        if main_gpu >= 0:
+            # Allocate 100% VRAM share to the selected GPU, 0% to all others
+            tensor_split = [0.0] * 16  # llama.cpp supports up to 16 GPUs
+            tensor_split[main_gpu] = 1.0
+
         # Load the main model with GPU acceleration
         self.model = Llama(
             model_path=str(model_path),
             n_ctx=n_ctx,
             n_gpu_layers=n_gpu_layers,  # Use GPU acceleration
             main_gpu=main_gpu,
+            tensor_split=tensor_split,
             chat_handler=self.chat_handler,
             verbose=verbose,
+            flash_attn=True,
         )
         
         self.model_path = model_path
