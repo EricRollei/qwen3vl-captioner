@@ -220,7 +220,6 @@ class Qwen3VLEngine:
             tensor_split=tensor_split,
             chat_handler=self.chat_handler,
             verbose=verbose,
-            flash_attn=True,
         )
         
         self.model_path = model_path
