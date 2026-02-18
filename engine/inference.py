@@ -193,6 +193,11 @@ class Qwen3VLEngine:
         if progress_callback:
             progress_callback("Loading vision encoder (mmproj)...")
         
+        # Pin to the selected GPU via CUDA_VISIBLE_DEVICES before loading
+        # anything. This is the most reliable way to force single-GPU usage
+        # on multi-GPU systems — llama.cpp only sees one device.
+        os.environ["CUDA_VISIBLE_DEVICES"] = str(main_gpu)
+
         # Create the vision chat handler for Qwen VL models
         self.chat_handler = Qwen25VLChatHandler(
             clip_model_path=str(mmproj_path),
@@ -202,22 +207,13 @@ class Qwen3VLEngine:
         if progress_callback:
             progress_callback("Loading language model (this may take a minute)...")
 
-        # Build tensor_split to force the model onto ONLY the selected GPU.
-        # Without this, llama.cpp will try to distribute layers across ALL
-        # available GPUs, which can hang during multi-GPU communication setup.
-        tensor_split = None
-        if main_gpu >= 0:
-            # Allocate 100% VRAM share to the selected GPU, 0% to all others
-            tensor_split = [0.0] * 16  # llama.cpp supports up to 16 GPUs
-            tensor_split[main_gpu] = 1.0
-
-        # Load the main model with GPU acceleration
+        # Load the main model with GPU acceleration.
+        # Since CUDA_VISIBLE_DEVICES limits visibility to one GPU,
+        # main_gpu=0 targets the (only) visible device.
         self.model = Llama(
             model_path=str(model_path),
             n_ctx=n_ctx,
-            n_gpu_layers=n_gpu_layers,  # Use GPU acceleration
-            main_gpu=main_gpu,
-            tensor_split=tensor_split,
+            n_gpu_layers=n_gpu_layers,
             chat_handler=self.chat_handler,
             verbose=verbose,
         )
