@@ -14,7 +14,7 @@ from PyQt6.QtGui import QIcon, QPixmap, QPainter, QColor, QPen
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
     QComboBox, QSlider, QTextEdit, QLineEdit, QFrame, QScrollArea,
-    QSizePolicy, QCheckBox,
+    QSizePolicy, QCheckBox, QTabWidget,
 )
 
 from .theme import COLORS
@@ -385,6 +385,64 @@ EXTRA_OPTIONS = [
 _ALL_OPTION_KEYS = {key for key, _, _ in EXTRA_OPTIONS}
 
 
+# --- Keyword Prompt Builder ---
+
+def _build_keyword_prompt(extra_opts: Dict[str, bool], name_value: str, count_hint: str) -> str:
+    """Build a prompt that requests a flat comma-separated keyword list."""
+    parts = [
+        "Analyze this image and output ONLY a flat, comma-separated list of keywords/tags that describe it.",
+        "Do NOT write sentences or prose — output only individual keywords separated by commas.",
+        "Cover: subject, setting, action/pose, objects, colors, mood, style, and medium.",
+    ]
+    active = _get_active_options(extra_opts)
+    if active.get("includeLighting"):
+        parts.append("Include lighting keywords.")
+    if active.get("includeCameraAngle"):
+        parts.append("Include camera angle keywords.")
+    if active.get("includeComposition"):
+        parts.append("Include composition keywords.")
+    if active.get("includeDOF"):
+        parts.append("Include depth of field keywords.")
+    if active.get("includeLightSource"):
+        parts.append("Include light source keywords.")
+    if active.get("includeAestheticQuality"):
+        parts.append("Include quality keywords.")
+    if active.get("includeTechnicalDetails"):
+        parts.append("Include camera/technical keywords.")
+    if active.get("includeWatermark"):
+        parts.append("Include watermark if present.")
+    if active.get("includeArtifacts"):
+        parts.append("Note any artifacts.")
+    if active.get("includeSafety"):
+        parts.append("Include an sfw/nsfw tag.")
+    if active.get("keepPG"):
+        parts.append("Keep all keywords SFW.")
+    if active.get("includeUncensored"):
+        parts.append("Include explicit/NSFW keywords for nudity, anatomy, and sexual content.")
+    if active.get("excludeStaticAttributes"):
+        parts.append("Exclude unchangeable physical attributes of people.")
+    if active.get("excludeText"):
+        parts.append("Do not include any text/OCR content.")
+    if active.get("excludeResolution"):
+        parts.append("Do not include resolution.")
+    if active.get("noAmbiguity"):
+        parts.append("Use precise, unambiguous keywords.")
+    if name_value:
+        parts.append(f"Use '{name_value}' as the name tag for any person/character.")
+    if count_hint:
+        parts.append(count_hint)
+    return " ".join(parts)
+
+
+# --- Keyword Count Options ---
+KEYWORD_COUNTS = {
+    "Few (5-10)": "Output 5-10 keywords.",
+    "Moderate (10-20)": "Output 10-20 keywords.",
+    "Many (20-40)": "Output 20-40 keywords.",
+    "Exhaustive (40+)": "Output 40 or more keywords covering every detail.",
+}
+
+
 # --- Caption Length Options ---
 CAPTION_LENGTHS = {
     "Short": "Keep the description brief, around 1-2 sentences.",
@@ -504,21 +562,40 @@ class SettingsPanel(QFrame):
         self._show_extra_options = True
         self._custom_edit_mode = False
 
-        # Outer scroll area
+        # Outer layout with tab widget
         outer_layout = QVBoxLayout(self)
         outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
 
-        # Panel header
-        header = QFrame()
-        header.setStyleSheet(f"border-bottom: 1px solid {COLORS['border']}; padding: 12px 16px;")
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        title = QLabel("⚙  Model Settings")
-        title.setStyleSheet(f"font-size: 14px; font-weight: 600; color: {COLORS['text_primary']}; border: none;")
-        header_layout.addWidget(title)
-        header_layout.addStretch()
-        outer_layout.addWidget(header)
+        # Tab widget
+        self._tabs = QTabWidget()
+        self._tabs.setStyleSheet(
+            f"QTabWidget::pane {{ border: none; background: {COLORS['bg_darkest']}; }}"
+            f"QTabBar::tab {{ background: {COLORS['bg_dark']}; color: {COLORS['text_dim']}; "
+            f"border: none; border-bottom: 2px solid transparent; "
+            f"padding: 8px 12px; font-size: 11px; font-weight: 600; "
+            f"min-width: 60px; }}"
+            f"QTabBar::tab:selected {{ color: {COLORS['text_primary']}; "
+            f"border-bottom: 2px solid {COLORS['accent']}; "
+            f"background: {COLORS['bg_darkest']}; }}"
+            f"QTabBar::tab:hover {{ color: {COLORS['text_secondary']}; "
+            f"background: {COLORS['bg_hover']}; }}"
+        )
 
+        self._tabs.addTab(self._build_model_tab(), "🔧 Model")
+        self._tabs.addTab(self._build_caption_tab(), "📝 Caption")
+        self._tabs.addTab(self._build_generate_tab(), "⚡ Generate")
+
+        outer_layout.addWidget(self._tabs)
+
+        # Finalize training mode visibility after all widgets are created
+        self._update_training_mode_ui()
+
+    # ─── Tab Builder Methods ──────────────────────────────
+
+    def _build_model_tab(self) -> QWidget:
+        """Build the 🔧 Model tab: model selection, load/unload, status."""
+        tab = QWidget()
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -536,7 +613,15 @@ class SettingsPanel(QFrame):
         model_row.setSpacing(6)
 
         self.model_combo = QComboBox()
-        # Populated dynamically by MainWindow._refresh_model_combo()
+        self.model_combo.setStyleSheet(
+            f"QComboBox {{ background: {COLORS['bg_input']}; color: {COLORS['text_primary']}; "
+            f"border: 1px solid {COLORS['border_light']}; border-radius: 4px; "
+            f"padding: 4px 8px; font-size: 11px; min-height: 28px; }}"
+            f"QComboBox:hover {{ border-color: {COLORS['accent']}; }}"
+            f"QComboBox QAbstractItemView {{ background: {COLORS['bg_dark']}; "
+            f"color: {COLORS['text_primary']}; selection-background-color: {COLORS['accent']}; "
+            f"selection-color: #ffffff; border: 1px solid {COLORS['border']}; }}"
+        )
         model_row.addWidget(self.model_combo, 1)
 
         self._download_btn = QPushButton()
@@ -555,13 +640,103 @@ class SettingsPanel(QFrame):
 
         layout.addLayout(model_row)
 
+        # Model action buttons row (Load + Unload side by side)
         self._model_is_loaded = False
-        self.load_model_btn = QPushButton("  Load Model")
-        self.load_model_btn.setProperty("class", "accent-button")
-        self.load_model_btn.clicked.connect(self._on_load_unload_clicked)
-        layout.addWidget(self.load_model_btn)
+        model_btn_row = QHBoxLayout()
+        model_btn_row.setSpacing(6)
+
+        self.load_model_btn = QPushButton("▶  Load Model")
+        self.load_model_btn.setFixedHeight(36)
+        self.load_model_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.load_model_btn.setStyleSheet(
+            f"QPushButton {{ background: {COLORS['accent']}; color: #ffffff; "
+            f"border: none; border-radius: 6px; font-size: 12px; font-weight: 600; "
+            f"padding: 0 12px; }}"
+            f"QPushButton:hover {{ background: {COLORS['accent_hover']}; }}"
+            f"QPushButton:disabled {{ background: {COLORS['bg_hover']}; color: {COLORS['text_dim']}; }}"
+        )
+        self.load_model_btn.clicked.connect(self.load_model_requested.emit)
+        model_btn_row.addWidget(self.load_model_btn, 1)
+
+        self.unload_model_btn = QPushButton("⏹  Unload")
+        self.unload_model_btn.setFixedHeight(36)
+        self.unload_model_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.unload_model_btn.setStyleSheet(
+            f"QPushButton {{ background: {COLORS['bg_dark']}; color: {COLORS['text_secondary']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 6px; "
+            f"font-size: 12px; font-weight: 600; padding: 0 12px; }}"
+            f"QPushButton:hover {{ background: {COLORS['error']}; color: #ffffff; "
+            f"border-color: {COLORS['error']}; }}"
+            f"QPushButton:disabled {{ background: {COLORS['bg_hover']}; color: {COLORS['text_dim']}; "
+            f"border-color: {COLORS['border']}; }}"
+        )
+        self.unload_model_btn.setEnabled(False)
+        self.unload_model_btn.clicked.connect(self.unload_model_requested.emit)
+        model_btn_row.addWidget(self.unload_model_btn)
+
+        layout.addLayout(model_btn_row)
+
+        # Loading status indicator
+        self._model_loading_label = QLabel("")
+        self._model_loading_label.setWordWrap(True)
+        self._model_loading_label.setStyleSheet(
+            f"color: {COLORS['accent_text']}; font-size: 10px; font-style: italic; "
+            f"padding: 2px 0;"
+        )
+        self._model_loading_label.setVisible(False)
+        layout.addWidget(self._model_loading_label)
 
         layout.addWidget(self._separator())
+
+        # ─── MODEL STATUS INFO BOX ───────────────────────
+        self.status_frame = QFrame()
+        self.status_frame.setProperty("class", "model-status")
+        status_layout = QVBoxLayout(self.status_frame)
+        status_layout.setContentsMargins(12, 10, 12, 10)
+        status_layout.setSpacing(4)
+
+        status_header = QHBoxLayout()
+        info_icon = QLabel("ℹ")
+        info_icon.setStyleSheet(f"color: {COLORS['accent_text']}; font-size: 13px;")
+        status_header.addWidget(info_icon)
+        status_title = QLabel("Model Status")
+        status_title.setProperty("class", "info-label")
+        status_header.addWidget(status_title)
+        status_header.addStretch()
+        status_layout.addLayout(status_header)
+
+        self.status_text = QLabel("Not loaded")
+        self.status_text.setStyleSheet(f"color: {COLORS['text_dim']}; font-size: 10px;")
+        self.status_text.setWordWrap(True)
+        status_layout.addWidget(self.status_text)
+
+        self.inference_time_label = QLabel("")
+        self.inference_time_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 10px;")
+        self.inference_time_label.setVisible(False)
+        status_layout.addWidget(self.inference_time_label)
+
+        layout.addWidget(self.status_frame)
+
+        layout.addStretch()
+        scroll.setWidget(scroll_widget)
+
+        tab_layout = QVBoxLayout(tab)
+        tab_layout.setContentsMargins(0, 0, 0, 0)
+        tab_layout.addWidget(scroll)
+        return tab
+
+    def _build_caption_tab(self) -> QWidget:
+        """Build the 📝 Caption tab: presets, training mode, output mode, extra options."""
+        tab = QWidget()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet(f"background: {COLORS['bg_darkest']}; border: none;")
+
+        scroll_widget = QWidget()
+        layout = QVBoxLayout(scroll_widget)
+        layout.setContentsMargins(16, 12, 16, 16)
+        layout.setSpacing(6)
 
         # ─── TARGET ARCHITECTURE ──────────────────────────
         layout.addWidget(self._section_header("TARGET ARCHITECTURE"))
@@ -594,8 +769,7 @@ class SettingsPanel(QFrame):
         )
         layout.addWidget(training_desc)
 
-        # Mode buttons row
-        self._training_mode = "general"  # general | style | character | concept
+        self._training_mode = "general"
         self._training_mode_buttons: Dict[str, QPushButton] = {}
 
         training_grid = QGridLayout()
@@ -637,7 +811,7 @@ class SettingsPanel(QFrame):
         self.trigger_word_input.textChanged.connect(lambda: self.settings_changed.emit())
         layout.addWidget(self.trigger_word_input)
 
-        # Exclusion text area (hidden for General mode)
+        # Exclusion text area
         self._exclusion_label = QLabel("Elements to Exclude from Captions")
         self._exclusion_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 11px; margin-top: 4px;")
         layout.addWidget(self._exclusion_label)
@@ -664,19 +838,60 @@ class SettingsPanel(QFrame):
         self.exclusion_text.textChanged.connect(lambda: self._refresh_prompt_preview())
         layout.addWidget(self.exclusion_text)
 
-        # Initial visibility (General hides exclusion controls)
-        self._update_training_mode_ui()
-
         layout.addWidget(self._separator())
 
-        # ─── CAPTION LENGTH ───────────────────────────────
-        layout.addWidget(self._section_header("CAPTION LENGTH"))
+        # ─── OUTPUT MODE ──────────────────────────────────
+        layout.addWidget(self._section_header("OUTPUT MODE"))
+
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(4)
+
+        self._output_mode = "caption"
+        self._output_mode_buttons: Dict[str, QPushButton] = {}
+
+        for mode_id, label, icon in [("caption", "Caption", "📝"), ("keywords", "Keywords", "🏷")]:
+            btn = QPushButton(f"{icon}  {label}")
+            btn.setCheckable(True)
+            btn.setFixedHeight(32)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setStyleSheet(
+                f"QPushButton {{ background: {COLORS['bg_hover']}; color: {COLORS['text_secondary']}; "
+                f"border: 1px solid {COLORS['border']}; border-radius: 6px; "
+                f"font-size: 11px; font-weight: 600; padding: 0 10px; }}"
+                f"QPushButton:checked {{ background: {COLORS['accent']}; color: #ffffff; "
+                f"border-color: {COLORS['accent']}; }}"
+            )
+            btn.clicked.connect(lambda checked, m=mode_id: self._set_output_mode(m))
+            mode_row.addWidget(btn)
+            self._output_mode_buttons[mode_id] = btn
+
+        self._output_mode_buttons["caption"].setChecked(True)
+        layout.addLayout(mode_row)
+
+        # ─── CAPTION LENGTH ──────────────────────────────
+        self._caption_length_label = self._section_header("CAPTION LENGTH")
+        layout.addWidget(self._caption_length_label)
 
         self.caption_length_combo = QComboBox()
         self.caption_length_combo.addItems(CAPTION_LENGTHS.keys())
         self.caption_length_combo.setCurrentText("Medium")
         self.caption_length_combo.currentTextChanged.connect(self._on_caption_length_changed)
         layout.addWidget(self.caption_length_combo)
+
+        # ─── KEYWORD COUNT ───────────────────────────────
+        self._keyword_count_label = self._section_header("KEYWORD COUNT")
+        layout.addWidget(self._keyword_count_label)
+
+        self.keyword_count_combo = QComboBox()
+        self.keyword_count_combo.addItems(KEYWORD_COUNTS.keys())
+        self.keyword_count_combo.setCurrentText("Moderate (10-20)")
+        self.keyword_count_combo.currentTextChanged.connect(lambda: self._refresh_prompt_preview())
+        layout.addWidget(self.keyword_count_combo)
+
+        self._keyword_count_label.setVisible(False)
+        self.keyword_count_combo.setVisible(False)
+
+        layout.addWidget(self._separator())
 
         # ─── EXTRA OPTIONS ────────────────────────────────
         extra_toggle_row = QHBoxLayout()
@@ -693,7 +908,6 @@ class SettingsPanel(QFrame):
         extra_toggle_row.addWidget(self.extra_chevron)
         layout.addLayout(extra_toggle_row)
 
-        # Scrollable extra options container
         self.extra_container = QFrame()
         self.extra_container.setProperty("class", "extra-options-container")
         extra_inner_layout = QVBoxLayout(self.extra_container)
@@ -723,7 +937,26 @@ class SettingsPanel(QFrame):
         extra_inner_layout.addWidget(extra_scroll)
         layout.addWidget(self.extra_container)
 
-        layout.addWidget(self._separator())
+        layout.addStretch()
+        scroll.setWidget(scroll_widget)
+
+        tab_layout = QVBoxLayout(tab)
+        tab_layout.setContentsMargins(0, 0, 0, 0)
+        tab_layout.addWidget(scroll)
+        return tab
+
+    def _build_generate_tab(self) -> QWidget:
+        """Build the ⚡ Generate tab: parameters, formatting, batch processing."""
+        tab = QWidget()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet(f"background: {COLORS['bg_darkest']}; border: none;")
+
+        scroll_widget = QWidget()
+        layout = QVBoxLayout(scroll_widget)
+        layout.setContentsMargins(16, 12, 16, 16)
+        layout.setSpacing(6)
 
         # ─── PARAMETERS ──────────────────────────────────
         layout.addWidget(self._section_header("PARAMETERS"))
@@ -774,8 +1007,8 @@ class SettingsPanel(QFrame):
         layout.addLayout(temp_row)
 
         self.temp_slider = QSlider(Qt.Orientation.Horizontal)
-        self.temp_slider.setRange(1, 20)  # 0.1 to 2.0
-        self.temp_slider.setValue(6)  # 0.6
+        self.temp_slider.setRange(1, 20)
+        self.temp_slider.setValue(6)
         self.temp_slider.setSingleStep(1)
         self.temp_slider.valueChanged.connect(
             lambda v: self.temp_value.setText(f"{v / 10:.1f}")
@@ -842,7 +1075,7 @@ class SettingsPanel(QFrame):
 
         layout.addWidget(self._separator())
 
-        # ─── BATCH PROCESSING SECTION ─────────────────────
+        # ─── BATCH PROCESSING ─────────────────────────────
         batch_header = QLabel("BATCH PROCESSING")
         batch_header.setProperty("class", "section-header")
         layout.addWidget(batch_header)
@@ -854,7 +1087,6 @@ class SettingsPanel(QFrame):
         )
         layout.addWidget(batch_desc)
 
-        # Batch options
         self.auto_save_cb = QCheckBox("Auto-save .txt sidecar for each image")
         self.auto_save_cb.setChecked(True)
         self.auto_save_cb.setStyleSheet(
@@ -881,7 +1113,7 @@ class SettingsPanel(QFrame):
         self.batch_btn.clicked.connect(self.batch_caption_requested.emit)
         layout.addWidget(self.batch_btn)
 
-        # Cancel button — visible during generation / batch / download
+        # Cancel button
         self.cancel_btn = QPushButton("✕  Cancel")
         self.cancel_btn.setFixedHeight(36)
         self.cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -893,7 +1125,7 @@ class SettingsPanel(QFrame):
             f"QPushButton:hover {{ background: {COLORS['error']}; color: #ffffff; }}"
         )
         self.cancel_btn.clicked.connect(self.cancel_requested.emit)
-        self.cancel_btn.setVisible(False)  # Hidden by default
+        self.cancel_btn.setVisible(False)
         layout.addWidget(self.cancel_btn)
 
         self.export_btn = QPushButton("#  Export to .txt Files")
@@ -903,41 +1135,13 @@ class SettingsPanel(QFrame):
         self.export_btn.clicked.connect(self.export_requested.emit)
         layout.addWidget(self.export_btn)
 
-        # ─── MODEL STATUS INFO BOX ───────────────────────
-        layout.addSpacing(8)
-
-        self.status_frame = QFrame()
-        self.status_frame.setProperty("class", "model-status")
-        status_layout = QVBoxLayout(self.status_frame)
-        status_layout.setContentsMargins(12, 10, 12, 10)
-        status_layout.setSpacing(4)
-
-        status_header = QHBoxLayout()
-        info_icon = QLabel("ℹ")
-        info_icon.setStyleSheet(f"color: {COLORS['accent_text']}; font-size: 13px;")
-        status_header.addWidget(info_icon)
-        status_title = QLabel("Model Status")
-        status_title.setProperty("class", "info-label")
-        status_header.addWidget(status_title)
-        status_header.addStretch()
-        status_layout.addLayout(status_header)
-
-        self.status_text = QLabel("Not loaded")
-        self.status_text.setStyleSheet(f"color: {COLORS['text_dim']}; font-size: 10px;")
-        self.status_text.setWordWrap(True)
-        status_layout.addWidget(self.status_text)
-
-        self.inference_time_label = QLabel("")
-        self.inference_time_label.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 10px;")
-        self.inference_time_label.setVisible(False)
-        status_layout.addWidget(self.inference_time_label)
-
-        layout.addWidget(self.status_frame)
-
         layout.addStretch()
-
         scroll.setWidget(scroll_widget)
-        outer_layout.addWidget(scroll)
+
+        tab_layout = QVBoxLayout(tab)
+        tab_layout.setContentsMargins(0, 0, 0, 0)
+        tab_layout.addWidget(scroll)
+        return tab
 
     # ─── Internal Helpers ─────────────────────────────────
 
@@ -1166,13 +1370,6 @@ class SettingsPanel(QFrame):
 
         self.settings_changed.emit()
 
-    def _on_load_unload_clicked(self):
-        """Route the load/unload button click based on current model state."""
-        if self._model_is_loaded:
-            self.unload_model_requested.emit()
-        else:
-            self.load_model_requested.emit()
-
     def _on_download_clicked(self):
         """Emit download request for the currently selected model."""
         self.download_model_requested.emit(self.model_combo.currentText())
@@ -1217,6 +1414,26 @@ class SettingsPanel(QFrame):
                 )
             self._refresh_prompt_preview()
 
+    def _set_output_mode(self, mode: str):
+        """Switch between caption and keywords output mode."""
+        self._output_mode = mode
+        for m, btn in self._output_mode_buttons.items():
+            btn.setChecked(m == mode)
+
+        is_caption = (mode == "caption")
+        # Toggle caption-length vs keyword-count visibility
+        self._caption_length_label.setVisible(is_caption)
+        self.caption_length_combo.setVisible(is_caption)
+        self._keyword_count_label.setVisible(not is_caption)
+        self.keyword_count_combo.setVisible(not is_caption)
+
+        self._refresh_prompt_preview()
+        self.settings_changed.emit()
+
+    def get_output_mode(self) -> str:
+        """Return the current output mode: 'caption' or 'keywords'."""
+        return self._output_mode
+
     def _refresh_prompt_preview(self):
         """Update the prompt template box to show the actual prompt that will be sent.
 
@@ -1225,7 +1442,7 @@ class SettingsPanel(QFrame):
         custom-edit is on) the user's manual text IS the prompt input
         and should not be overwritten.
         """
-        if self._active_preset_id and not self._custom_edit_mode:
+        if (self._active_preset_id or self._output_mode == "keywords") and not self._custom_edit_mode:
             built = self.get_prompt()
             self.prompt_text.blockSignals(True)
             self.prompt_text.setPlainText(built)
@@ -1236,6 +1453,7 @@ class SettingsPanel(QFrame):
     def get_prompt(self) -> str:
         """Build the full prompt using the active preset's model-specific builder.
 
+        In keyword mode, uses the keyword prompt builder instead.
         When *custom edit mode* is on, the user's text in the prompt box
         is returned directly (no builder override).
         """
@@ -1245,17 +1463,25 @@ class SettingsPanel(QFrame):
             prompt += self._build_exclusion_block()
             return prompt
 
-        length_key = self.caption_length_combo.currentText()
-        length_instruction = CAPTION_LENGTHS.get(length_key, "")
-
         # Always gather extra options — even when the panel is collapsed
         extra_opts = self.get_extra_options()
 
         # Get the {name} value if referAsName is enabled
         name_value = ""
         if extra_opts.get("referAsName"):
-            # Look for a name input field — fallback to "the subject"
             name_value = getattr(self, "_name_input_value", "") or "the subject"
+
+        # ── Keyword mode — bypass preset builders entirely ──
+        if self._output_mode == "keywords":
+            count_key = self.keyword_count_combo.currentText()
+            count_hint = KEYWORD_COUNTS.get(count_key, "")
+            prompt = _build_keyword_prompt(extra_opts, name_value, count_hint)
+            prompt += self._build_exclusion_block()
+            return prompt
+
+        # ── Caption mode — use preset builder ──
+        length_key = self.caption_length_combo.currentText()
+        length_instruction = CAPTION_LENGTHS.get(length_key, "")
 
         # Build the base prompt from the active preset's builder
         prompt = ""
@@ -1320,22 +1546,36 @@ class SettingsPanel(QFrame):
     # ─── Status Updates ───────────────────────────────────
 
     def set_model_status(self, status: str, detail: str = "", is_loaded: bool = False):
-        """Update the model status display."""
+        """Update the model status display and button states."""
         self._model_is_loaded = is_loaded
+
+        # Toggle button states
+        self.load_model_btn.setEnabled(not is_loaded)
+        self.unload_model_btn.setEnabled(is_loaded)
+        self.model_combo.setEnabled(not is_loaded)
+
+        # Update load button appearance based on state
         if is_loaded:
-            self.load_model_btn.setEnabled(True)
-            self.load_model_btn.setText("  Unload Model")
-            self.load_model_btn.setProperty("class", "secondary-button")
-            self.load_model_btn.style().unpolish(self.load_model_btn)
-            self.load_model_btn.style().polish(self.load_model_btn)
+            self.load_model_btn.setText("✓  Loaded")
+            self.load_model_btn.setStyleSheet(
+                f"QPushButton {{ background: {COLORS['accent_dim']}; color: {COLORS['accent_text']}; "
+                f"border: 1px solid {COLORS['accent']}; border-radius: 6px; "
+                f"font-size: 12px; font-weight: 600; padding: 0 12px; }}"
+            )
             self.status_text.setStyleSheet(f"color: {COLORS['text_secondary']}; font-size: 10px;")
         else:
-            self.load_model_btn.setEnabled(True)
-            self.load_model_btn.setText("  Load Model")
-            self.load_model_btn.setProperty("class", "accent-button")
-            self.load_model_btn.style().unpolish(self.load_model_btn)
-            self.load_model_btn.style().polish(self.load_model_btn)
+            self.load_model_btn.setText("▶  Load Model")
+            self.load_model_btn.setStyleSheet(
+                f"QPushButton {{ background: {COLORS['accent']}; color: #ffffff; "
+                f"border: none; border-radius: 6px; font-size: 12px; font-weight: 600; "
+                f"padding: 0 12px; }}"
+                f"QPushButton:hover {{ background: {COLORS['accent_hover']}; }}"
+                f"QPushButton:disabled {{ background: {COLORS['bg_hover']}; color: {COLORS['text_dim']}; }}"
+            )
             self.status_text.setStyleSheet(f"color: {COLORS['text_dim']}; font-size: 10px;")
+
+        # Hide loading indicator when reaching a final state
+        self._model_loading_label.setVisible(False)
 
         self.status_text.setText(status)
         if detail:
@@ -1343,6 +1583,15 @@ class SettingsPanel(QFrame):
             self.inference_time_label.setVisible(True)
         else:
             self.inference_time_label.setVisible(False)
+
+    def set_model_loading(self, message: str):
+        """Show a loading indicator during model load/unload."""
+        self._model_loading_label.setText(f"⏳ {message}")
+        self._model_loading_label.setVisible(True)
+        self.load_model_btn.setEnabled(False)
+        self.unload_model_btn.setEnabled(False)
+        self.model_combo.setEnabled(False)
+        self._download_btn.setEnabled(False)
 
     def set_inference_time(self, seconds: float):
         """Update the inference time display."""
@@ -1361,7 +1610,8 @@ class SettingsPanel(QFrame):
     def set_generating(self, is_generating: bool):
         """Toggle UI state during generation."""
         self.batch_btn.setEnabled(not is_generating)
-        self.load_model_btn.setEnabled(not is_generating)
+        self.load_model_btn.setEnabled(not is_generating and not self._model_is_loaded)
+        self.unload_model_btn.setEnabled(not is_generating and self._model_is_loaded)
         self._download_btn.setEnabled(not is_generating)
         # Show cancel button while generating
         self.cancel_btn.setVisible(is_generating)
@@ -1370,4 +1620,5 @@ class SettingsPanel(QFrame):
         """Toggle cancel button visibility during model download."""
         self.cancel_btn.setVisible(in_progress)
         self._download_btn.setEnabled(not in_progress)
-        self.load_model_btn.setEnabled(not in_progress)
+        self.load_model_btn.setEnabled(not in_progress and not self._model_is_loaded)
+        self.unload_model_btn.setEnabled(not in_progress and self._model_is_loaded)
